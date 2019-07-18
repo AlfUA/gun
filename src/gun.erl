@@ -115,7 +115,7 @@
 	retry_timeout   => pos_integer(),
 	supervise       => boolean(),
 	trace           => boolean(),
-	transport       => tcp | tls | ssl,
+	transport       => tcp | tls | ssl | socks5,
 	transport_opts  => [gen_tcp:connect_option()] | [ssl:connect_option()],
 	ws_opts         => ws_opts()
 }.
@@ -275,7 +275,7 @@ check_options([{supervise, B}|Opts]) when B =:= true; B =:= false ->
 	check_options(Opts);
 check_options([{trace, B}|Opts]) when B =:= true; B =:= false ->
 	check_options(Opts);
-check_options([{transport, T}|Opts]) when T =:= tcp; T =:= tls ->
+check_options([{transport, T}|Opts]) when T =:= tcp; T =:= tls; T =:= socks5 ->
 	check_options(Opts);
 check_options([{transport_opts, L}|Opts]) when is_list(L) ->
 	check_options(Opts);
@@ -726,6 +726,7 @@ init({Owner, Host, Port, Opts}) ->
 	Retry = maps:get(retry, Opts, 5),
 	OriginTransport = maps:get(transport, Opts, default_transport(Port)),
 	{OriginScheme, Transport} = case OriginTransport of
+		socks5 -> {<<"http">>, gun_socks5};
 		tcp -> {<<"http">>, gun_tcp};
 		tls -> {<<"https">>, gun_tls}
 	end,
@@ -755,7 +756,7 @@ not_connected(_, {retries, Retries}, State0=#state{host=Host, port=Port, opts=Op
 		transport=Transport, event_handler=EvHandler, event_handler_state=EvHandlerState0}) ->
 	TransOpts0 = maps:get(transport_opts, Opts, []),
 	TransOpts1 = case Transport of
-		gun_tcp -> TransOpts0;
+		Tran when Tran =:= gun_tcp; Tran =:= gun_socks5 -> TransOpts0;
 		gun_tls -> ensure_alpn(maps:get(protocols, Opts, [http2, http]), TransOpts0)
 	end,
 	TransOpts = [binary, {active, false}|TransOpts1],
@@ -771,7 +772,7 @@ not_connected(_, {retries, Retries}, State0=#state{host=Host, port=Port, opts=Op
 	case Transport:connect(Host, Port, TransOpts, ConnectTimeout) of
 		{ok, Socket} ->
 			Protocol = case Transport of
-				gun_tcp ->
+				T when T =:= gun_tcp; T =:= gun_socks5 ->
 					case maps:get(protocols, Opts, [http]) of
 						[http] -> gun_http;
 						[http2] -> gun_http2
@@ -891,6 +892,7 @@ connected(cast, {connect, ReplyTo, StreamRef, Destination0, Headers},
 			Destination1
 	end,
 	ProtoState2 = Protocol:connect(ProtoState, StreamRef, ReplyTo, Destination, Headers),
+	io:format("[~p] After Connect~n", [?MODULE]),
 	{keep_state, State#state{protocol_state=ProtoState2}};
 %% When using gun_tls_proxy we need a separate message to know whether
 %% we need to switch to a different protocol.
